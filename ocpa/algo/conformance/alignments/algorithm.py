@@ -21,7 +21,7 @@ from ocpa.objects.log.ocel import OCEL
 
 from ocpa.objects.graph.process_execution_graph.processexecutiongraph import OCEvent, ProcessExecutionGraph
 from ocpa.algo.conformance.alignments.alignment import Alignment, Move, UndefinedModelMove, DefinedModelMove, LogMove, SynchronousMove, \
-    UndefinedSynchronousMove, TransitionSignature, DijkstraInfo, Binding
+    UndefinedSynchronousMove, TransitionSignature, DijkstraInfo, Binding, CostFunction, default_cost_function, create_weighted_cost_function
 
 
 
@@ -869,3 +869,523 @@ def calculate_oc_alignment_given_variant_id(ocel: OCEL, extern_ocpn: ObjectCentr
     alignment_for_variant.add_object_types(ocel.process_execution_objects[indirect_id])
     #print("Process execution aligned!")
     return alignment_for_variant
+
+
+# ============================================================================
+# Weighted Alignment Functions with Custom Cost Functions
+# ============================================================================
+
+def process_execution_net_with_cost_function(
+    ocel, indirect_id, px, date_format, cost_function: CostFunction
+) -> Tuple[ObjectCentricPetriNet, List[Tuple[ObjectCentricPetriNet.Place, str]]]:
+    """
+    Create a process execution net with custom cost function for LogMoves.
+    
+    This is a modified version of process_execution_net_from_process_execution
+    that allows custom cost calculation for log moves.
+    
+    Parameters
+    ----------
+    ocel : OCEL
+        Object-Centric Event Log
+    indirect_id : str
+        Process execution ID
+    px : List
+        Process execution (list of event IDs)
+    date_format : str
+        Date format string
+    cost_function : CostFunction
+        Function to calculate move costs
+        
+    Returns
+    -------
+    Tuple[ObjectCentricPetriNet, List[Tuple[Place, str]], List[Tuple[Place, str]]]
+        The process execution net, initial marking list, and final marking list
+    """
+    initial_marking_list = []
+    final_marking_list = []
+    # Create process execution Graph (px-graph) from process execution
+    px_graph = ProcessExecutionGraph()
+    # Get events with related objects
+    for event_id in px:
+        event = OCEvent()
+        event.event_id = event_id
+        event.event_name = ocel.get_value(event_id, 'event_activity')
+        event.objects = get_all_event_objects(ocel, event_id)
+        event.datetime = ocel.get_value(event_id, 'event_timestamp')
+        px_graph.add_event(event)
+
+    px_graph.update_dependencies()
+
+    # Start with empty petri net for the px-net
+    px_net = ObjectCentricPetriNet()
+    # Add all start places
+    current_front_place = dict()
+    number_of_places = dict()
+    list_of_obj_instances_in_px = ocel.process_execution_objects[indirect_id]
+    list_of_obj_instances_in_px = [(obj_type, obj_instance) for obj_type, obj_instance in list_of_obj_instances_in_px]
+    
+    for obj_type, obj_instance in list_of_obj_instances_in_px:
+        number_of_places[obj_instance] = 1
+        place = ObjectCentricPetriNet.Place(name=f"({obj_instance} - s1)", object_type=obj_instance, initial=True)
+        set_properties_of_place(place, obj_type)
+        current_front_place[obj_instance] = place
+        px_net.places.add(place)
+        initial_marking_list.append((place, obj_instance))
+
+    # Add leaf nodes from the process execution graph until empty
+    num_of_transition = 0
+    while not px_graph.is_empty():
+        num_of_transition += 1
+        next_event = px_graph.drop_next_event_leaf_to_head()
+
+        # Create move with custom cost function
+        log_move_cost = cost_function(next_event.event_name, next_event.objects, False)
+        log_move = Move(model_move=None, log_move=next_event.event_name, 
+                       objects=next_event.objects, cost=log_move_cost)
+        
+        transition = ObjectCentricPetriNet.Transition(name=f"px-{next_event.event_name}-{num_of_transition}",
+                                                      label=f"px-{next_event.event_name}-{num_of_transition}")
+        px_net.transitions.add(transition)
+        
+        # add arcs for transition
+        for obj_instance in next_event.objects:
+            # to transition
+            arc = ObjectCentricPetriNet.Arc(current_front_place[obj_instance], transition)
+            px_net.add_arc(arc)
+            # from transition
+            number_of_places[obj_instance] += 1
+            place = ObjectCentricPetriNet.Place(name=f"({obj_instance} - {number_of_places[obj_instance]})",
+                                                object_type=obj_instance)
+            px_net.places.add(place)
+            original_type = \
+                [obj_type for obj_type, obj_inst in list_of_obj_instances_in_px if obj_inst == obj_instance][0]
+            set_properties_of_place(place, original_type)
+
+            arc = ObjectCentricPetriNet.Arc(transition, place)
+            px_net.add_arc(arc)
+            current_front_place[obj_instance] = place
+
+        # create signature of transition
+        in_card = get_in_cardinality_of_transition_px(transition)
+        out_card = get_out_cardinality_of_transition_px(transition)
+        transition_signature_for_created_transition = TransitionSignature(name=next_event.event_name,
+                                                                          in_cardinality=in_card,
+                                                                          out_cardinality=out_card,
+                                                                          move=log_move)
+        set_properties_of_transition(transition, transition_signature_for_created_transition)
+
+    # make current front places to final places
+    for obj_instance, final_place in current_front_place.items():
+        final_place.final = True
+        final_marking_list.append((final_place, obj_instance))
+
+    return (px_net, initial_marking_list, final_marking_list)
+
+
+def create_all_bindings_with_cost_function(
+    pn: ObjectCentricPetriNet, 
+    transition: ObjectCentricPetriNet.Transition,
+    current_marking: FrozenMarking,
+    num_by_type_in: Dict[str, int], 
+    availabel_by_type_in: Dict[str, Set[str]],
+    chosen_by_type_in: Dict[str, Set[str]],
+    cost_function: CostFunction
+) -> List[Tuple[ObjectCentricPetriNet.Transition, Binding, Move, FrozenMarking]]:
+    """
+    Create all valid bindings with custom cost function.
+    
+    This is a modified version of create_all_bindings that allows custom
+    cost calculation when converting UndefinedModelMove to DefinedModelMove.
+    
+    Parameters
+    ----------
+    pn : ObjectCentricPetriNet
+        The Petri net
+    transition : Transition
+        The transition to fire
+    current_marking : FrozenMarking
+        The current marking
+    num_by_type_in : Dict[str, int]
+        Number of objects required by type
+    availabel_by_type_in : Dict[str, Set[str]]
+        Available object instances by type
+    chosen_by_type_in : Dict[str, Set[str]]
+        Chosen object instances by type
+    cost_function : CostFunction
+        Function to calculate move costs
+        
+    Returns
+    -------
+    List[Tuple[Transition, Binding, Move, FrozenMarking]]
+        List of valid bindings
+    """
+    # Copy recursion relevant lists to prevent side effects
+    num_by_type = copy.deepcopy(num_by_type_in)
+    available_by_type = copy.deepcopy(availabel_by_type_in)
+    chosen_by_type = copy.deepcopy(chosen_by_type_in)
+
+    if not num_by_type.keys():
+        # the binding is done
+        move = get_properties_of_transition(transition).move
+
+        # Check whether the binding complies with nue-net requirement
+        if isinstance(move, UndefinedSynchronousMove):
+            # get instances of all the chosen types
+            instances_from_px = set()
+            instances_from_dejure = set()
+
+            for place, obj_id in current_marking.tokens:
+                if place in move.px_preset:
+                    if obj_id in chosen_by_type[place.object_type]:
+                        instances_from_px.add(obj_id)
+                if place in move.dejure_preset:
+                    if obj_id in chosen_by_type[place.object_type]:
+                        instances_from_dejure.add(obj_id)
+
+            # Binding not valid if nue-net requirement not fulfilled
+            if not instances_from_dejure == instances_from_px:
+                return []
+
+        binding = Binding(chosen_by_type)
+
+        # calculate Move with custom cost function
+        if isinstance(move, UndefinedSynchronousMove):
+            object_set = set()
+            for obj_id_set in chosen_by_type.values():
+                object_set = object_set.union(obj_id_set)
+            move = move.get_defined_sync_move(list(object_set))
+            
+        if isinstance(move, UndefinedModelMove):
+            object_set = set()
+            for obj_id_set in chosen_by_type.values():
+                object_set = object_set.union(obj_id_set)
+            move = move.define(list(object_set))
+            # Recalculate cost using custom cost function
+            move.cost = cost_function(move.model_move, move.objects, move.silent)
+
+        # calculate resulting marking
+        marking_list = list(current_marking.tokens)
+        # consume token
+        for source in transition.preset:
+            for obj_id in chosen_by_type[source.object_type]:
+                marking_list.remove((source, obj_id))
+        # produce token
+        for target in transition.postset:
+            for obj_id in chosen_by_type[target.object_type]:
+                marking_list.append((target, obj_id))
+        resulting_marking = FrozenMarking(frozenset(marking_list))
+
+        return [(transition, binding, move, resulting_marking)]
+
+    # Still types that one needs to choose combinations from
+    type_to_define = next(iter(num_by_type.keys()))
+    number_to_select = num_by_type[type_to_define]
+
+    if number_to_select == len(available_by_type[type_to_define]):
+        # directly choose all of them (speedup)
+        chosen_by_type.setdefault(type_to_define, set())
+        for obj_id in available_by_type[type_to_define]:
+            chosen_by_type[type_to_define].add(obj_id)
+        del available_by_type[type_to_define]
+        del num_by_type[type_to_define]
+
+        return create_all_bindings_with_cost_function(pn, transition, current_marking, num_by_type, 
+                                                      available_by_type, chosen_by_type, cost_function)
+
+    if number_to_select < len(available_by_type[type_to_define]):
+        potential_obj_id = next(iter(available_by_type[type_to_define]))
+
+        # use potential one
+        use_num_by_type = copy.deepcopy(num_by_type)
+        use_available_by_type = copy.deepcopy(available_by_type)
+        use_chosen_by_type = copy.deepcopy(chosen_by_type)
+
+        use_chosen_by_type.setdefault(type_to_define, set())
+        use_chosen_by_type[type_to_define].add(potential_obj_id)
+        use_num_by_type[type_to_define] -= 1
+        use_available_by_type[type_to_define].remove(potential_obj_id)
+        if use_num_by_type[type_to_define] == 0:
+            del use_num_by_type[type_to_define]
+        use_binding_list = create_all_bindings_with_cost_function(pn, transition, current_marking, use_num_by_type, 
+                                                                   use_available_by_type, use_chosen_by_type, cost_function)
+
+        # not use potential one
+        not_use_num_by_type = copy.deepcopy(num_by_type)
+        not_use_available_by_type = copy.deepcopy(available_by_type)
+        not_use_chosen_by_type = copy.deepcopy(chosen_by_type)
+
+        not_use_available_by_type[type_to_define].remove(potential_obj_id)
+        not_use_binding_list = create_all_bindings_with_cost_function(pn, transition, current_marking, not_use_num_by_type,
+                                                                       not_use_available_by_type, not_use_chosen_by_type, 
+                                                                       cost_function)
+
+        return use_binding_list + not_use_binding_list
+
+    if number_to_select > len(available_by_type[type_to_define]):
+        raise Exception("Algorithmic Error in Binding Calculation. Number to select is lower than number of objects.")
+
+    raise Exception("Algorithmic Error in Binding Calculation. Unwanted Code Path reached.")
+
+
+def all_valid_bindings_with_cost_function(
+    pn: ObjectCentricPetriNet, 
+    current_marking: FrozenMarking,
+    cost_function: CostFunction
+) -> List[Tuple[ObjectCentricPetriNet.Transition, Binding, Move, FrozenMarking]]:
+    """
+    Generate all valid bindings with custom cost function.
+    
+    This is a modified version of all_valid_bindings that uses a custom
+    cost function for calculating move costs.
+    
+    Parameters
+    ----------
+    pn : ObjectCentricPetriNet
+        The Petri net
+    current_marking : FrozenMarking
+        The current marking
+    cost_function : CostFunction
+        Function to calculate move costs
+        
+    Returns
+    -------
+    List[Tuple[Transition, Binding, Move, FrozenMarking]]
+        List of all valid bindings
+    """
+    if not isinstance(pn, ObjectCentricPetriNet):
+        raise Exception("Parameter pn ist not of type ObjectCentricPetriNet")
+    if not isinstance(current_marking, FrozenMarking):
+        raise Exception("Parameter current_marking ist not of type FrozenMarking")
+
+    all_val_bindings = []
+    transition: ObjectCentricPetriNet.Transition
+    for transition in pn.transitions:
+        number_of_required_objects_by_type = dict()
+        help_places = dict()
+        available_obj_instances_by_type: Dict[str, Set[str]] = dict()
+
+        in_arc: ObjectCentricPetriNet.Arc
+        for in_arc in transition.in_arcs:
+            source_place: ObjectCentricPetriNet.Place = in_arc.source
+
+            help_places.setdefault(source_place.object_type, source_place)
+            if help_places[source_place.object_type] == source_place:
+                number_of_required_objects_by_type.setdefault(source_place.object_type, 0)
+                number_of_required_objects_by_type[source_place.object_type] += 1
+
+            obj_ids_in_place = set()
+            for place, obj_id in current_marking.tokens:
+                if place == source_place:
+                    obj_ids_in_place.add(obj_id)
+            available_obj_instances_by_type.setdefault(source_place.object_type, obj_ids_in_place)
+            available_obj_instances_by_type[source_place.object_type] \
+                = available_obj_instances_by_type[source_place.object_type].intersection(obj_ids_in_place)
+
+        valid = True
+        chosen_obj_ids_by_type = dict()
+        for obj_type in number_of_required_objects_by_type.keys():
+            if number_of_required_objects_by_type[obj_type] > len(available_obj_instances_by_type[obj_type]):
+                valid = False
+                break
+            chosen_obj_ids_by_type[obj_type] = set()
+
+        if valid:
+            all_val_bindings_of_this_transition = create_all_bindings_with_cost_function(
+                pn, transition, current_marking,
+                number_of_required_objects_by_type,
+                available_obj_instances_by_type,
+                chosen_obj_ids_by_type,
+                cost_function)
+            all_val_bindings = all_val_bindings + all_val_bindings_of_this_transition
+
+    return all_val_bindings
+
+
+def dijkstra_with_cost_function(
+    sync_net: ObjectCentricPetriNet, 
+    ini_marking: FrozenMarking, 
+    fin_marking: FrozenMarking,
+    cost_function: CostFunction
+) -> Alignment:
+    """
+    Dijkstra shortest path algorithm with custom cost function.
+    
+    This is a modified version of dijkstra that uses all_valid_bindings_with_cost_function.
+    
+    Parameters
+    ----------
+    sync_net : ObjectCentricPetriNet
+        The synchronous product net
+    ini_marking : FrozenMarking
+        Initial marking
+    fin_marking : FrozenMarking
+        Final marking
+    cost_function : CostFunction
+        Function to calculate move costs
+        
+    Returns
+    -------
+    Alignment
+        The computed alignment
+    """
+    if not isinstance(ini_marking, FrozenMarking):
+        Exception("ini_marking is not of type FrozenMarking")
+    if not isinstance(fin_marking, FrozenMarking):
+        Exception("fin_marking is not of type FrozenMarking")
+    if not isinstance(sync_net, ObjectCentricPetriNet):
+        Exception("sync_net is not of type ObjectCentricPetriNet")
+
+    visited = dict()
+    reachable = dict()
+
+    # add the start marking with distance 0
+    reachable[ini_marking] = DijkstraInfo(previous_marking=None, move_to_this=None, cost=0)
+
+    # while final marking not yet visited:
+    while fin_marking not in visited.keys():
+        if not reachable.keys():
+            raise Exception("Dijkstra did not find a shortest path. Algorithmic error.")
+        
+        # select the reachable unvisited marking with the lowest cost
+        selected_marking = None
+        selected_dij_info: Optional[DijkstraInfo] = None
+        for marking, dij_inf in reachable.items():
+            if selected_marking is None or dij_inf.cost < selected_dij_info.cost:
+                selected_marking = marking
+                selected_dij_info = dij_inf
+
+        # update the previous marking and the move as well in table
+        visited[selected_marking] = reachable[selected_marking]
+        del reachable[selected_marking]
+
+        # Use custom cost function for binding generation
+        all_val_bindings = all_valid_bindings_with_cost_function(sync_net, selected_marking, cost_function)
+        for transition, binding, move, resulting_marking in all_val_bindings:
+            # if not reachable or better cost found
+            if resulting_marking not in visited.keys():
+                new_cost = visited[selected_marking].cost + move.cost
+                if resulting_marking not in reachable.keys() or new_cost < reachable[resulting_marking].cost:
+                    reachable[resulting_marking] = DijkstraInfo(selected_marking, move, new_cost)
+
+    # Build alignment from visited markings
+    alignment = alignment_from_dijkstra(visited, fin_marking)
+    return alignment
+
+
+def calculate_oc_alignments_with_cost_function(
+    ocel: OCEL, 
+    extern_ocpn: ObjectCentricPetriNet, 
+    cost_function: CostFunction,
+    date_format='%Y-%m-%d %H:%M:%S%z'
+) -> Dict[str, Alignment]:
+    """
+    Calculate object-centric alignments with custom cost function.
+    
+    This function allows specifying custom cost calculations for alignment moves,
+    enabling weighted alignments where different activities have different importance.
+    
+    Parameters
+    ----------
+    ocel : OCEL
+        Object-Centric Event Log
+    extern_ocpn : ObjectCentricPetriNet
+        Object-Centric Petri Net (de jure model)
+    cost_function : CostFunction
+        Function to calculate move costs with signature:
+        (activity_name: str, objects: List[str], is_silent: bool) -> float
+    date_format : str, optional
+        Date format string
+        
+    Returns
+    -------
+    Dict[str, Alignment]
+        Dictionary mapping variant IDs to their alignments
+        
+    Examples
+    --------
+    >>> # Using weighted cost function
+    >>> weights = {"Create Order": 0.3, "Pack Order": 0.5, "Ship Order": 0.2}
+    >>> cost_fn = create_weighted_cost_function(weights)
+    >>> alignments = calculate_oc_alignments_with_cost_function(ocel, ocpn, cost_fn)
+    >>> 
+    >>> # Using default cost function (same as calculate_oc_alignments)
+    >>> from ocpa.algo.conformance.alignments.alignment import default_cost_function
+    >>> alignments = calculate_oc_alignments_with_cost_function(ocel, ocpn, default_cost_function)
+    """
+    # Input check
+    if not isinstance(ocel, OCEL):
+        raise Exception("Parameter ocel is not of type OCEL.")
+    if not isinstance(extern_ocpn, ObjectCentricPetriNet):
+        raise Exception("Parameter extern_ocpn is not of type ObjectCentricPetriNet.")
+
+    # For each variant use a process execution in the log to calculate an individual alignment
+    alignment_dict = dict()
+    for variant_id in ocel.variants:
+        ocpn = copy.deepcopy(extern_ocpn)
+
+        indirect_id = ocel.variants_dict[variant_id][0]
+        process_execution = ocel.process_executions[indirect_id]
+
+        # Create Event Net with custom cost function
+        px_net, px_initial_marking_list, px_final_marking_list = process_execution_net_with_cost_function(
+            ocel, indirect_id, process_execution, date_format, cost_function)
+        
+        # Preprocessing of ocpn to remove variable arcs (uses original function)
+        dejure_initial_marking_list, dejure_final_marking_list = preprocessing_dejure_net(ocel, indirect_id, ocpn)
+        
+        # Create Synchronous Product Net (uses original function)
+        sync_pn, sync_initial_marking, sync_final_marking = create_synchronous_product_net(
+            px_net, px_initial_marking_list, px_final_marking_list, 
+            ocpn, dejure_initial_marking_list, dejure_final_marking_list)
+        
+        # Search for shortest path with custom cost function
+        alignment_for_variant = dijkstra_with_cost_function(sync_pn, sync_initial_marking, 
+                                                             sync_final_marking, cost_function)
+        alignment_for_variant.add_object_types(ocel.process_execution_objects[indirect_id])
+        alignment_dict[variant_id] = alignment_for_variant
+        
+    return alignment_dict
+
+
+def calculate_oc_alignments_with_weights(
+    ocel: OCEL,
+    extern_ocpn: ObjectCentricPetriNet,
+    activity_weights: Dict[str, float],
+    date_format='%Y-%m-%d %H:%M:%S%z'
+) -> Dict[str, Alignment]:
+    """
+    Calculate object-centric alignments with activity-specific weights.
+    
+    This is a convenience function that creates a weighted cost function
+    and calls calculate_oc_alignments_with_cost_function.
+    
+    The cost formula is: cost = len(objects) * (1 + weight)
+    
+    Parameters
+    ----------
+    ocel : OCEL
+        Object-Centric Event Log
+    extern_ocpn : ObjectCentricPetriNet
+        Object-Centric Petri Net (de jure model)
+    activity_weights : Dict[str, float]
+        Dictionary mapping activity names to their weights (typically 0-1 range).
+        Activities not in the dictionary will have weight 0.
+        Example: {"Create Order": 0.3, "Pack Order": 0.5, "Ship Order": 0.2}
+    date_format : str, optional
+        Date format string
+        
+    Returns
+    -------
+    Dict[str, Alignment]
+        Dictionary mapping variant IDs to their alignments
+        
+    Examples
+    --------
+    >>> weights = {"Create Order": 0.3, "Pack Order": 0.5, "Ship Order": 0.2}
+    >>> alignments = calculate_oc_alignments_with_weights(ocel, ocpn, weights)
+    >>> for variant_id, alignment in alignments.items():
+    >>>     print(f"Variant {variant_id}: cost = {alignment.get_cost()}")
+    """
+    cost_function = create_weighted_cost_function(activity_weights)
+    return calculate_oc_alignments_with_cost_function(ocel, extern_ocpn, cost_function, date_format)
