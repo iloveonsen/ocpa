@@ -1,0 +1,13 @@
+{
+  "Confirm Order": 0.2,
+  "End Route": 0.05,
+  "Item out of stock": 0.03,
+  "Load Cargo": 0.08,
+  "Pay Order": 0.12,
+  "Payment Reminder": 0.01,
+  "Pick Item": 0.15,
+  "Place Order": 0.25,
+  "Reorder Item": 0.01,
+  "Start Route": 0.1,
+  "Fuel Car": 0.0
+}

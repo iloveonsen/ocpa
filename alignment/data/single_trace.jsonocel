@@ -1,0 +1,134 @@
+{
+  "ocel:global-event": {
+    "ocel:activity": "__INVALID__"
+  },
+  "ocel:global-object": {
+    "ocel:type": "__INVALID__"
+  },
+  "ocel:global-log": {
+    "ocel:attribute-names": [],
+    "ocel:object-types": [
+      "order",
+      "item",
+      "delivery"
+    ],
+    "ocel:version": "1.0",
+    "ocel:ordering": "timestamp"
+  },
+  "ocel:events": {
+    "0": {
+      "ocel:activity": "Place Order",
+      "ocel:timestamp": "2022-10-20T16:56:19.864004",
+      "ocel:omap": [
+        "order1",
+        "item2",
+        "item3"
+      ],
+      "ocel:vmap": {}
+    },
+    "1": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2022-10-20T16:56:20.864004",
+      "ocel:omap": [
+        "order1",
+        "item2",
+        "item3"
+      ],
+      "ocel:vmap": {}
+    },
+    "2": {
+      "ocel:activity": "Pick Item",
+      "ocel:timestamp": "2022-10-20T17:01:51.864004",
+      "ocel:omap": [
+        "item3"
+      ],
+      "ocel:vmap": {}
+    },
+    "3": {
+      "ocel:activity": "Pick Item",
+      "ocel:timestamp": "2022-10-20T17:01:51.864004",
+      "ocel:omap": [
+        "item2"
+      ],
+      "ocel:vmap": {}
+    },
+    "4": {
+      "ocel:activity": "Pay Order",
+      "ocel:timestamp": "2022-10-20T17:01:51.864004",
+      "ocel:omap": [
+        "order1"
+      ],
+      "ocel:vmap": {}
+    },
+    "5": {
+      "ocel:activity": "Place Order",
+      "ocel:timestamp": "2022-10-20T17:06:18.864004",
+      "ocel:omap": [
+        "order2",
+        "item5",
+        "item4"
+      ],
+      "ocel:vmap": {}
+    },
+    "6": {
+      "ocel:activity": "Confirm Order",
+      "ocel:timestamp": "2022-10-20T17:06:19.864004",
+      "ocel:omap": [
+        "order2",
+        "item5",
+        "item4"
+      ],
+      "ocel:vmap": {}
+    },
+    "7": {
+      "ocel:activity": "Item out of stock",
+      "ocel:timestamp": "2022-10-20T17:11:46.864004",
+      "ocel:omap": [
+        "item5"
+      ],
+      "ocel:vmap": {}
+    },
+    "8": {
+      "ocel:activity": "Pick Item",
+      "ocel:timestamp": "2022-10-20T17:11:47.864004",
+      "ocel:omap": [
+        "item4"
+      ],
+      "ocel:vmap": {}
+    },
+    "9": {
+      "ocel:activity": "Pay Order",
+      "ocel:timestamp": "2022-10-20T17:11:47.864004",
+      "ocel:omap": [
+        "order2"
+      ],
+      "ocel:vmap": {}
+    }
+  },
+  "ocel:objects": {
+    "order1": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "item5": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "item3": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "item4": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    },
+    "order2": {
+      "ocel:type": "order",
+      "ocel:ovmap": {}
+    },
+    "item2": {
+      "ocel:type": "item",
+      "ocel:ovmap": {}
+    }
+  }
+}
