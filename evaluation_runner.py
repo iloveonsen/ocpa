@@ -32,6 +32,7 @@ import tracemalloc
 import os
 from datetime import datetime
 from typing import Dict, List
+from tqdm.auto import tqdm
 
 # Sample log file path - update this to your actual file
 filename = "sample-logs/bpi2017/BPI2017-Final.csv"
@@ -148,7 +149,10 @@ total_variants = len(filtered_ocel.variants_dict)
 completed = 0
 failed = 0
 
-for variant_key in filtered_ocel.variants_dict.keys():
+for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
+                        desc="Processing variants",
+                        total=total_variants,
+                        unit="variant"):
     try:
         # Get variant information
         indirect_id = filtered_ocel.variants_dict[variant_key][0]
@@ -250,14 +254,9 @@ for variant_key in filtered_ocel.variants_dict.keys():
 
         completed += 1
 
-        # Print progress
-        if completed % 10 == 0:
-            print(f"Progress: {completed}/{total_variants} variants processed "
-                  f"({completed/total_variants*100:.1f}%)")
-
     except Exception as e:
         failed += 1
-        print(f"✗ Failed variant {variant_key}: {str(e)}")
+        tqdm.write(f"✗ Failed variant {variant_key}: {str(e)}")
         # Store failed result with error info
         results.append({
             'variant_id': variant_key,
