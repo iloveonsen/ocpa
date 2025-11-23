@@ -6,10 +6,10 @@ detailed statistics about each alignment calculation including:
 - Event and object counts
 - Alignment costs
 - Move type distributions (log/model/sync)
-- Move sequences
-- Execution times
+- Detailed move sequences with log/model comparison
+- Execution times and memory usage
 
-Results are saved to a CSV file for further analysis.
+Results are saved to a CSV file in the evaluation/ folder for further analysis.
 """
 
 # Core alignment imports
@@ -28,6 +28,8 @@ from ocpa.algo.util.filtering.log.activity_filtering import filter_infrequent_ac
 # Data processing and timing
 import pandas as pd
 import timeit
+import tracemalloc
+import os
 from datetime import datetime
 from typing import Dict, List
 
@@ -41,6 +43,9 @@ parameters = {
     "time_name": "event_timestamp",
     "sep": ","
 }
+
+# Create evaluation folder if it doesn't exist
+os.makedirs("evaluation", exist_ok=True)
 
 print("=" * 80)
 print("ALIGNMENT EVALUATION RUNNER")
@@ -150,14 +155,21 @@ for variant_key in filtered_ocel.variants_dict.keys():
         process_execution = filtered_ocel.process_executions[indirect_id]
         num_events = len(process_execution)
 
-        # Get unique objects for this variant
+        # Get variant frequency (how many times this variant appears in the log)
+        variant_frequency = len(filtered_ocel.variants_dict[variant_key])
+
+        # Get unique objects and object types for this variant
         process_execution_objects = filtered_ocel.process_execution_objects[indirect_id]
         unique_objects = set()
+        unique_object_types = set()
         for obj_type, obj_id in process_execution_objects:
             unique_objects.add(obj_id)
+            unique_object_types.add(obj_type)
         num_objects = len(unique_objects)
+        num_object_types = len(unique_object_types)
 
-        # Start timing
+        # Start timing and memory tracking
+        tracemalloc.start()
         start_time = timeit.default_timer()
 
         # Calculate alignment
@@ -168,43 +180,72 @@ for variant_key in filtered_ocel.variants_dict.keys():
             date_format='%Y-%m-%d %H:%M:%S.%f'
         )
 
-        # Calculate execution time
+        # Calculate execution time and memory usage
         execution_time = timeit.default_timer() - start_time
+        current_memory, peak_memory = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
 
-        # Analyze moves
+        current_memory_mb = current_memory / 1024 / 1024
+        peak_memory_mb = peak_memory / 1024 / 1024
+
+        # Analyze moves with detailed sequence
         num_log_moves = 0
         num_model_moves = 0
         num_sync_moves = 0
-        move_sequence = []
+        num_silent_moves = 0
+        move_sequence_lines = []
 
         for move in alignment.moves:
+            # Determine move type and collect stats
             if isinstance(move, LogMove):
                 num_log_moves += 1
-                move_sequence.append(f"L:{move.log_move}")
+                move_type = "LOG"
+                log_activity = move.log_move if move.log_move else "-"
+                model_activity = "-"
             elif isinstance(move, DefinedModelMove):
                 num_model_moves += 1
-                move_sequence.append(f"M:{move.model_move}")
+                move_type = "MODEL"
+                log_activity = "-"
+                model_activity = move.model_move if move.model_move else "-"
+                # Check if it's a silent move
+                if hasattr(move, 'silent') and move.silent:
+                    num_silent_moves += 1
+                    move_type = "MODEL(SILENT)"
             elif isinstance(move, SynchronousMove):
                 num_sync_moves += 1
-                move_sequence.append(f"S:{move.model_move}")
+                move_type = "SYNC"
+                log_activity = move.log_move if move.log_move else "-"
+                model_activity = move.model_move if move.model_move else "-"
             else:
                 # Catch any other move types
-                move_sequence.append(f"U:{type(move).__name__}")
+                move_type = f"UNKNOWN({type(move).__name__})"
+                log_activity = "-"
+                model_activity = "-"
 
-        move_sequence_str = "|".join(move_sequence)
+            # Format: "Log: X | Model: Y | Move Type: Z | Cost: C"
+            move_line = (f"Log: {log_activity} | Model: {model_activity} | "
+                        f"Move Type: {move_type} | Cost: {move.cost:.3f}")
+            move_sequence_lines.append(move_line)
+
+        move_sequence_str = "\n".join(move_sequence_lines)
 
         # Store result
         results.append({
             'variant_id': variant_key,
+            'variant_frequency': variant_frequency,
             'num_events': num_events,
             'num_objects': num_objects,
+            'num_object_types': num_object_types,
             'alignment_cost': alignment.get_cost(),
             'num_log_moves': num_log_moves,
             'num_model_moves': num_model_moves,
             'num_sync_moves': num_sync_moves,
+            'num_silent_moves': num_silent_moves,
             'total_moves': len(alignment.moves),
             'move_sequence': move_sequence_str,
-            'execution_time': execution_time
+            'execution_time': execution_time,
+            'current_memory_mb': current_memory_mb,
+            'peak_memory_mb': peak_memory_mb
         })
 
         completed += 1
@@ -220,15 +261,20 @@ for variant_key in filtered_ocel.variants_dict.keys():
         # Store failed result with error info
         results.append({
             'variant_id': variant_key,
+            'variant_frequency': -1,
             'num_events': -1,
             'num_objects': -1,
+            'num_object_types': -1,
             'alignment_cost': -1,
             'num_log_moves': -1,
             'num_model_moves': -1,
             'num_sync_moves': -1,
+            'num_silent_moves': -1,
             'total_moves': -1,
             'move_sequence': f"ERROR: {str(e)}",
-            'execution_time': -1
+            'execution_time': -1,
+            'current_memory_mb': -1,
+            'peak_memory_mb': -1
         })
 
 print()
@@ -243,8 +289,8 @@ print()
 # Create DataFrame
 df = pd.DataFrame(results)
 
-# Save to CSV
-output_filename = f"alignment_evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+# Save to CSV in evaluation folder
+output_filename = f"evaluation/alignment_evaluation_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 df.to_csv(output_filename, index=False)
 print(f"✓ Results saved to: {output_filename}")
 print()
@@ -255,22 +301,29 @@ successful_df = df[df['alignment_cost'] >= 0]
 if len(successful_df) > 0:
     print("Statistical Summary (successful alignments):")
     print("-" * 80)
-    print(successful_df[['num_events', 'num_objects', 'alignment_cost',
-                         'num_log_moves', 'num_model_moves', 'num_sync_moves',
-                         'execution_time']].describe())
+    print(successful_df[['variant_frequency', 'num_events', 'num_objects', 'num_object_types',
+                         'alignment_cost', 'num_log_moves', 'num_model_moves', 'num_sync_moves',
+                         'num_silent_moves', 'execution_time', 'peak_memory_mb']].describe())
     print()
 
     print("Top 5 most costly alignments:")
     print("-" * 80)
-    print(successful_df.nlargest(5, 'alignment_cost')[['variant_id', 'num_events',
-                                                         'num_objects', 'alignment_cost',
-                                                         'execution_time']])
+    print(successful_df.nlargest(5, 'alignment_cost')[['variant_id', 'variant_frequency',
+                                                         'num_events', 'num_objects',
+                                                         'alignment_cost', 'execution_time']])
     print()
 
     print("Top 5 longest execution times:")
     print("-" * 80)
     print(successful_df.nlargest(5, 'execution_time')[['variant_id', 'num_events',
                                                          'num_objects', 'alignment_cost',
+                                                         'execution_time', 'peak_memory_mb']])
+    print()
+
+    print("Top 5 highest memory usage:")
+    print("-" * 80)
+    print(successful_df.nlargest(5, 'peak_memory_mb')[['variant_id', 'num_events',
+                                                         'num_objects', 'peak_memory_mb',
                                                          'execution_time']])
 
 print()
