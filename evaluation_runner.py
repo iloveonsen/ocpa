@@ -155,22 +155,26 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
                         unit="variant"):
     try:
         # Get variant information
-        indirect_id = filtered_ocel.variants_dict[variant_key][0]
+        process_execution_ids = filtered_ocel.variants_dict[variant_key]
+        indirect_id = process_execution_ids[0]  # Use first case as representative
         process_execution = filtered_ocel.process_executions[indirect_id]
         num_events = len(process_execution)
 
         # Get variant frequency (how many times this variant appears in the log)
-        variant_frequency = len(filtered_ocel.variants_dict[variant_key])
+        variant_frequency = len(process_execution_ids)
 
         # Get unique objects and object types for this variant
         process_execution_objects = filtered_ocel.process_execution_objects[indirect_id]
         unique_objects = set()
         unique_object_types = set()
+        object_ids_list = []
         for obj_type, obj_id in process_execution_objects:
             unique_objects.add(obj_id)
             unique_object_types.add(obj_type)
+            object_ids_list.append(obj_id)
         num_objects = len(unique_objects)
         num_object_types = len(unique_object_types)
+        object_ids_str = ','.join(object_ids_list)
 
         # Start timing and memory tracking
         tracemalloc.start()
@@ -236,10 +240,12 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
         # Store result
         results.append({
             'variant_id': variant_key,
+            'process_execution_id': indirect_id,
             'variant_frequency': variant_frequency,
             'num_events': num_events,
             'num_objects': num_objects,
             'num_object_types': num_object_types,
+            'object_ids': object_ids_str,
             'alignment_cost': alignment.get_cost(),
             'num_log_moves': num_log_moves,
             'num_model_moves': num_model_moves,
@@ -260,10 +266,12 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
         # Store failed result with error info
         results.append({
             'variant_id': variant_key,
+            'process_execution_id': -1,
             'variant_frequency': -1,
             'num_events': -1,
             'num_objects': -1,
             'num_object_types': -1,
+            'object_ids': 'ERROR',
             'alignment_cost': -1,
             'num_log_moves': -1,
             'num_model_moves': -1,
@@ -307,23 +315,25 @@ if len(successful_df) > 0:
 
     print("Top 5 most costly alignments:")
     print("-" * 80)
-    print(successful_df.nlargest(5, 'alignment_cost')[['variant_id', 'variant_frequency',
-                                                         'num_events', 'num_objects',
-                                                         'alignment_cost', 'execution_time']])
+    print(successful_df.nlargest(5, 'alignment_cost')[['variant_id', 'process_execution_id',
+                                                         'variant_frequency', 'num_events',
+                                                         'num_objects', 'alignment_cost',
+                                                         'execution_time']])
     print()
 
     print("Top 5 longest execution times:")
     print("-" * 80)
-    print(successful_df.nlargest(5, 'execution_time')[['variant_id', 'num_events',
-                                                         'num_objects', 'alignment_cost',
-                                                         'execution_time', 'peak_memory_mb']])
+    print(successful_df.nlargest(5, 'execution_time')[['variant_id', 'process_execution_id',
+                                                         'num_events', 'num_objects',
+                                                         'alignment_cost', 'execution_time',
+                                                         'peak_memory_mb']])
     print()
 
     print("Top 5 highest memory usage:")
     print("-" * 80)
-    print(successful_df.nlargest(5, 'peak_memory_mb')[['variant_id', 'num_events',
-                                                         'num_objects', 'peak_memory_mb',
-                                                         'execution_time']])
+    print(successful_df.nlargest(5, 'peak_memory_mb')[['variant_id', 'process_execution_id',
+                                                         'num_events', 'num_objects',
+                                                         'peak_memory_mb', 'execution_time']])
 
 print()
 print("=" * 80)
