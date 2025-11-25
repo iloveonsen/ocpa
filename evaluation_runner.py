@@ -155,12 +155,13 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
                         unit="variant"):
     try:
         # Get variant information
-        indirect_id = filtered_ocel.variants_dict[variant_key][0]
+        case_ids = filtered_ocel.variants_dict[variant_key]
+        indirect_id = case_ids[0]
         process_execution = filtered_ocel.process_executions[indirect_id]
         num_events = len(process_execution)
 
         # Get variant frequency (how many times this variant appears in the log)
-        variant_frequency = len(filtered_ocel.variants_dict[variant_key])
+        variant_frequency = len(case_ids)
 
         # Get unique objects and object types for this variant
         process_execution_objects = filtered_ocel.process_execution_objects[indirect_id]
@@ -236,6 +237,7 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
         # Store result
         results.append({
             'variant_id': variant_key,
+            'case_ids': '|'.join(case_ids),  # Use | separator for CSV compatibility
             'variant_frequency': variant_frequency,
             'num_events': num_events,
             'num_objects': num_objects,
@@ -257,9 +259,16 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
     except Exception as e:
         failed += 1
         tqdm.write(f"✗ Failed variant {variant_key}: {str(e)}")
+        # Try to get case_ids even on failure
+        try:
+            case_ids = filtered_ocel.variants_dict[variant_key]
+            case_ids_str = '|'.join(case_ids)
+        except:
+            case_ids_str = "ERROR"
         # Store failed result with error info
         results.append({
             'variant_id': variant_key,
+            'case_ids': case_ids_str,
             'variant_frequency': -1,
             'num_events': -1,
             'num_objects': -1,
