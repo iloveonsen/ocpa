@@ -237,7 +237,7 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
         # Store result
         results.append({
             'variant_id': variant_key,
-            'case_ids': '|'.join(case_ids),  # Use | separator for CSV compatibility
+            'case_ids': '|'.join(map(str, case_ids)),  # Convert integers to strings
             'variant_frequency': variant_frequency,
             'num_events': num_events,
             'num_objects': num_objects,
@@ -262,7 +262,7 @@ for variant_key in tqdm(filtered_ocel.variants_dict.keys(),
         # Try to get case_ids even on failure
         try:
             case_ids = filtered_ocel.variants_dict[variant_key]
-            case_ids_str = '|'.join(case_ids)
+            case_ids_str = '|'.join(map(str, case_ids))
         except:
             case_ids_str = "ERROR"
         # Store failed result with error info
